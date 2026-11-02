@@ -1,6 +1,7 @@
 package com.sonicether.soundphysics;
 
 import com.sonicether.soundphysics.integration.ClothConfigIntegration;
+import com.sonicether.soundphysics.integration.SableIntegration;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.ModLoadingContext;
@@ -26,6 +27,10 @@ public class NeoForgeSoundPhysicsMod extends SoundPhysicsMod {
 
     public void clientSetup(FMLClientSetupEvent event) {
         initClient();
+        if (ModList.get().isLoaded("sable")) {
+            SableIntegration.Client.init();
+            Loggers.log("Enabled Sable sound occlusion and reflections");
+        }
         if (isClothConfigLoaded()) {
             ModLoadingContext.get().registerExtensionPoint(IConfigScreenFactory.class, () -> (client, parent) -> {
                 return ClothConfigIntegration.createConfigScreen(parent);

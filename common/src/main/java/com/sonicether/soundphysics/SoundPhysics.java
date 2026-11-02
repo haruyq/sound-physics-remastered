@@ -1,6 +1,10 @@
 package com.sonicether.soundphysics;
 
 import java.util.regex.Pattern;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
@@ -8,7 +12,6 @@ import com.sonicether.soundphysics.utils.RaycastUtils;
 import com.sonicether.soundphysics.utils.SoundRateManager;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.FluidTags;
-import org.joml.Vector3f;
 import org.lwjgl.openal.AL10;
 import org.lwjgl.openal.AL11;
 import org.lwjgl.openal.ALC10;
@@ -20,6 +23,7 @@ import com.sonicether.soundphysics.profiling.TaskProfiler;
 import com.sonicether.soundphysics.profiling.TaskProfiler.TaskProfilerHandle;
 import com.sonicether.soundphysics.utils.LevelAccessUtils;
 import com.sonicether.soundphysics.world.ClientLevelProxy;
+import com.sonicether.soundphysics.world.MovingClientLevel;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -30,6 +34,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -240,12 +245,16 @@ public class SoundPhysics {
     private static Vec3 evaluateEnvironment(int sourceID, double posX, double posY, double posZ, SoundSource category, ResourceLocation sound, float directGainScale) {
         LocalPlayer player = minecraft.player;
         ClientLevel level = minecraft.level;
+        ClientLevelProxy levelProxy = getLevelProxy();
 
-        if (player == null || level == null || (posX == 0D && posY == 0D && posZ == 0D)) {
+        if (player == null || level == null || levelProxy == null || (posX == 0D && posY == 0D && posZ == 0D)) {
             setDefaultEnvironment(sourceID, directGainScale);
             return null;
         }
         Vec3 soundPos = new Vec3(posX, posY, posZ);
+        if (levelProxy instanceof MovingClientLevel movingLevel) {
+            soundPos = movingLevel.toWorld(soundPos);
+        }
         double distance = player.position().distanceTo(soundPos);
         if (distance > SoundPhysicsMod.CONFIG.maxSoundProcessingDistance.get()) {
             Loggers.logDebug("Sound {} is too far away from player ({} blocks)", sound, distance);
@@ -287,12 +296,12 @@ public class SoundPhysics {
         Vec3 normalToPlayer = playerPos.subtract(soundPos).normalize();
 
         BlockPos soundBlockPos = BlockPos.containing(soundPos);
-        FluidState soundFluidState = getLevelProxy().getFluidState(soundBlockPos);
+        FluidState soundFluidState = levelProxy instanceof MovingClientLevel movingLevel ? movingLevel.getFluidStateAt(soundPos) : levelProxy.getFluidState(soundBlockPos);
         boolean sourceIsUnderwater = soundFluidState.is(FluidTags.WATER);
 
         Loggers.logDebug("Player pos: {}, {}, {} \tSound Pos: {}, {}, {} \tTo player vector: {}, {}, {}", playerPos.x, playerPos.y, playerPos.z, soundPos.x, soundPos.y, soundPos.z, normalToPlayer.x, normalToPlayer.y, normalToPlayer.z);
 
-        double occlusionAccumulation = calculateOcclusion(soundPos, playerPos, category, sound);
+        double occlusionAccumulation = calculateOcclusion(levelProxy, soundPos, playerPos, category, sound);
 
         directCutoff = (float) Math.exp(-occlusionAccumulation * absorptionCoeff);
         float directGain = directGainScale * (float) Math.pow(directCutoff, 0.1D);
@@ -330,7 +339,7 @@ public class SoundPhysics {
 
         float gAngle = PHI * (float) Math.PI * 2F;
 
-        Vec3 directSharedAirspaceVector = getSharedAirspace(soundPos, playerPos);
+        Vec3 directSharedAirspaceVector = getSharedAirspace(levelProxy, soundPos, playerPos);
 
         if (directSharedAirspaceVector != null) {
             audioDirection.addDirectAirspace(directSharedAirspaceVector);
@@ -345,22 +354,22 @@ public class SoundPhysics {
 
             Vec3 rayEnd = new Vec3(soundPos.x + rayDir.x * maxDistance, soundPos.y + rayDir.y * maxDistance, soundPos.z + rayDir.z * maxDistance);
 
-            BlockHitResult rayHit = RaycastUtils.rayCast(getLevelProxy(), soundPos, rayEnd, soundBlockPos);
+            BlockHitResult rayHit = RaycastUtils.rayCast(levelProxy, soundPos, rayEnd, soundBlockPos);
 
             if (rayHit.getType() == HitResult.Type.BLOCK) {
                 double rayLength = soundPos.distanceTo(rayHit.getLocation());
 
                 // Additional bounces
-                BlockPos lastHitBlock = rayHit.getBlockPos();
+                BlockHitResult lastHit = rayHit;
                 Vec3 lastHitPos = rayHit.getLocation();
-                Vec3 lastHitNormal = new Vec3(rayHit.getDirection().step());
+                Vec3 lastHitNormal = RaycastUtils.getNormal(rayHit);
                 Vec3 lastRayDir = rayDir;
 
                 float totalRayDistance = (float) rayLength;
 
                 RaycastRenderer.addSoundBounceRay(soundPos, rayHit.getLocation(), ChatFormatting.GREEN.getColor());
 
-                Vec3 firstSharedAirspaceVector = getSharedAirspace(rayHit, playerPos);
+                Vec3 firstSharedAirspaceVector = getSharedAirspace(levelProxy, rayHit, playerPos);
                 if (firstSharedAirspaceVector != null) {
                     audioDirection.addSharedAirspace(firstSharedAirspaceVector, totalRayDistance);
                 }
@@ -371,9 +380,9 @@ public class SoundPhysics {
                     Vec3 newRayStart = lastHitPos;
                     Vec3 newRayEnd = new Vec3(newRayStart.x + newRayDir.x * maxDistance, newRayStart.y + newRayDir.y * maxDistance, newRayStart.z + newRayDir.z * maxDistance);
 
-                    BlockHitResult newRayHit = RaycastUtils.rayCast(getLevelProxy(), newRayStart, newRayEnd, lastHitBlock);
+                    BlockHitResult newRayHit = RaycastUtils.rayCastFromHit(levelProxy, newRayStart, newRayEnd, lastHit);
 
-                    float blockReflectivity = getBlockReflectivity(lastHitBlock);
+                    float blockReflectivity = getBlockReflectivity(levelProxy, lastHit);
                     float energyTowardsPlayer = 0.25F * (blockReflectivity * 0.75F + 0.25F);
 
                     if (newRayHit.getType() == HitResult.Type.MISS) {
@@ -392,11 +401,11 @@ public class SoundPhysics {
                         totalRayDistance += newRayLength;
 
                         lastHitPos = newRayHitPos;
-                        lastHitNormal = new Vec3(newRayHit.getDirection().step());
+                        lastHitNormal = RaycastUtils.getNormal(newRayHit);
                         lastRayDir = newRayDir;
-                        lastHitBlock = newRayHit.getBlockPos();
+                        lastHit = newRayHit;
 
-                        Vec3 sharedAirspaceVector = getSharedAirspace(newRayHit, playerPos);
+                        Vec3 sharedAirspaceVector = getSharedAirspace(levelProxy, newRayHit, playerPos);
                         if (sharedAirspaceVector != null) {
                             audioDirection.addSharedAirspace(sharedAirspaceVector, totalRayDistance);
                         }
@@ -505,14 +514,12 @@ public class SoundPhysics {
         return AMBIENT_PATTERN.matcher(sound.toString()).matches();
     }
 
-    private static float getBlockReflectivity(BlockPos blockPos) {
-        var levelProxy = getLevelProxy();
-
+    private static float getBlockReflectivity(ClientLevelProxy levelProxy, BlockHitResult hit) {
         if (levelProxy == null) {
             return SoundPhysicsMod.CONFIG.defaultBlockReflectivity.get();
         }
 
-        BlockState blockState = levelProxy.getBlockState(blockPos);
+        BlockState blockState = RaycastUtils.getHitLevel(levelProxy, hit).getBlockState(hit.getBlockPos());
         return SoundPhysicsMod.REFLECTIVITY_CONFIG.getBlockDefinitionValue(blockState);
     }
 
@@ -527,9 +534,9 @@ public class SoundPhysics {
         return new Vec3(x, y, z);
     }
 
-    private static double calculateOcclusion(Vec3 soundPos, Vec3 playerPos, SoundSource category, ResourceLocation sound) {
+    private static double calculateOcclusion(ClientLevelProxy levelProxy, Vec3 soundPos, Vec3 playerPos, SoundSource category, ResourceLocation sound) {
         if (SoundPhysicsMod.CONFIG.strictOcclusion.get()) {
-            return Math.min(runOcclusion(soundPos, playerPos), SoundPhysicsMod.CONFIG.maxOcclusion.get());
+            return Math.min(runOcclusion(levelProxy, soundPos, playerPos), SoundPhysicsMod.CONFIG.maxOcclusion.get());
         }
         boolean isBlock = category == SoundSource.BLOCKS || BLOCK_PATTERN.matcher(sound.toString()).matches();
         double variationFactor = SoundPhysicsMod.CONFIG.occlusionVariation.get();
@@ -539,14 +546,14 @@ public class SoundPhysics {
         }
 
         double occlusionAccMin = Double.MAX_VALUE;
-        occlusionAccMin = Math.min(occlusionAccMin, runOcclusion(soundPos, playerPos));
+        occlusionAccMin = Math.min(occlusionAccMin, runOcclusion(levelProxy, soundPos, playerPos));
 
         if (variationFactor > 0D) {
             for (int x = -1; x <= 1; x += 2) {
                 for (int y = -1; y <= 1; y += 2) {
                     for (int z = -1; z <= 1; z += 2) {
                         Vec3 offset = new Vec3(x, y, z).scale(variationFactor);
-                        occlusionAccMin = Math.min(occlusionAccMin, runOcclusion(soundPos.add(offset), playerPos.add(offset)));
+                        occlusionAccMin = Math.min(occlusionAccMin, runOcclusion(levelProxy, soundPos.add(offset), playerPos.add(offset)));
                     }
                 }
             }
@@ -555,9 +562,7 @@ public class SoundPhysics {
         return Math.min(occlusionAccMin, SoundPhysicsMod.CONFIG.maxOcclusion.get());
     }
 
-    private static double runOcclusion(Vec3 soundPos, Vec3 playerPos) {
-        ClientLevelProxy levelProxy = getLevelProxy();
-
+    private static double runOcclusion(ClientLevelProxy levelProxy, Vec3 soundPos, Vec3 playerPos) {
         if (levelProxy == null) {
             return 0D;
         }
@@ -565,12 +570,10 @@ public class SoundPhysics {
         double occlusionAccumulation = 0D;
         Vec3 rayOrigin = soundPos;
 
-        BlockPos lastBlockPos = BlockPos.containing(soundPos);
+        Map<BlockGetter, Set<BlockPos>> ignoredHits = new HashMap<>();
 
         for (int i = 0; i < SoundPhysicsMod.CONFIG.maxOcclusionRays.get(); i++) {
-            BlockHitResult rayHit = RaycastUtils.rayCast(getLevelProxy(), rayOrigin, playerPos, lastBlockPos);
-
-            lastBlockPos = rayHit.getBlockPos();
+            BlockHitResult rayHit = i == 0 ? RaycastUtils.rayCast(levelProxy, rayOrigin, playerPos, BlockPos.containing(soundPos)) : RaycastUtils.rayCastIgnoringHits(levelProxy, rayOrigin, playerPos, ignoredHits);
 
             if (rayHit.getType() == HitResult.Type.MISS) {
                 RaycastRenderer.addOcclusionRay(rayOrigin, playerPos.add(0D, -0.1D, 0D), Mth.hsvToRgb(1F / 3F * (1F - Math.min(1F, (float) occlusionAccumulation / 12F)), 1F, 1F));
@@ -582,14 +585,16 @@ public class SoundPhysics {
             BlockPos blockHitPos = rayHit.getBlockPos();
             rayOrigin = rayHit.getLocation();
 
-            BlockState blockHit = levelProxy.getBlockState(blockHitPos);
+            var hitLevel = RaycastUtils.getHitLevel(levelProxy, rayHit);
+            ignoredHits.computeIfAbsent(hitLevel, key -> new HashSet<>()).add(blockHitPos);
+            BlockState blockHit = hitLevel.getBlockState(blockHitPos);
             float blockOcclusion = SoundPhysicsMod.OCCLUSION_CONFIG.getBlockDefinitionValue(blockHit);
 
             // Regardless to whether we hit from inside or outside
-            Vec3 dirVec = rayOrigin.subtract(blockHitPos.getX() + 0.5D, blockHitPos.getY() + 0.5D, blockHitPos.getZ() + 0.5D);
+            Vec3 dirVec = RaycastUtils.getLocalPosition(rayHit).subtract(blockHitPos.getX() + 0.5D, blockHitPos.getY() + 0.5D, blockHitPos.getZ() + 0.5D);
             Direction sideHit = Direction.getNearest(dirVec.x, dirVec.y, dirVec.z);
 
-            if (!blockHit.isFaceSturdy(levelProxy, rayHit.getBlockPos(), sideHit)) {
+            if (!blockHit.isFaceSturdy(hitLevel, rayHit.getBlockPos(), sideHit)) {
                 blockOcclusion *= SoundPhysicsMod.CONFIG.nonFullBlockOcclusionFactor.get();
             }
 
@@ -624,10 +629,10 @@ public class SoundPhysics {
      * @return the vector between the hit and the listener or null if there is no shared airspace
      */
     @Nullable
-    private static Vec3 getSharedAirspace(BlockHitResult hit, Vec3 listenerPosition) {
-        Vector3f hitNormal = hit.getDirection().step();
-        Vec3 rayStart = new Vec3(hit.getLocation().x + hitNormal.x() * 0.001D, hit.getLocation().y + hitNormal.y() * 0.001D, hit.getLocation().z + hitNormal.z() * 0.001D);
-        return getSharedAirspace(rayStart, listenerPosition);
+    private static Vec3 getSharedAirspace(ClientLevelProxy levelProxy, BlockHitResult hit, Vec3 listenerPosition) {
+        Vec3 hitNormal = RaycastUtils.getNormal(hit);
+        Vec3 rayStart = hit.getLocation().add(hitNormal.scale(0.001D));
+        return getSharedAirspace(levelProxy, rayStart, listenerPosition);
     }
 
     /**
@@ -638,8 +643,8 @@ public class SoundPhysics {
      * @return the vector between the hit and the listener or null if there is no shared airspace
      */
     @Nullable
-    private static Vec3 getSharedAirspace(Vec3 soundPosition, Vec3 listenerPosition) {
-        BlockHitResult finalRayHit = RaycastUtils.rayCast(getLevelProxy(), soundPosition, listenerPosition, null);
+    private static Vec3 getSharedAirspace(ClientLevelProxy levelProxy, Vec3 soundPosition, Vec3 listenerPosition) {
+        BlockHitResult finalRayHit = RaycastUtils.rayCast(levelProxy, soundPosition, listenerPosition, null);
         if (finalRayHit.getType() == HitResult.Type.MISS) {
             RaycastRenderer.addSoundBounceRay(soundPosition, listenerPosition.add(0D, -0.1D, 0D), ChatFormatting.WHITE.getColor());
             return soundPosition.subtract(listenerPosition);

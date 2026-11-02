@@ -6,6 +6,7 @@ import com.sonicether.soundphysics.profiling.TaskProfiler;
 import com.sonicether.soundphysics.world.CachingClientLevel;
 import com.sonicether.soundphysics.world.ClientLevelProxy;
 import com.sonicether.soundphysics.world.ClonedClientLevel;
+import com.sonicether.soundphysics.world.MovingClientLevel;
 import com.sonicether.soundphysics.world.UnsafeClientLevel;
 
 import net.minecraft.client.Minecraft;
@@ -13,6 +14,8 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 
 import javax.annotation.Nullable;
+import java.util.List;
+import java.util.function.Function;
 
 /**
  * Utility module to manage creation, invalidation, and updating of client level clones.
@@ -26,10 +29,21 @@ public class LevelAccessUtils {
 
     private static final TaskProfiler PROFILER = new TaskProfiler("Level Caching");
     private static final Minecraft MC = Minecraft.getInstance();
+    private static volatile Function<ClientLevel, List<MovingClientLevel.SubLevel>> subLevelProvider;
+    private static volatile MovingLevelCache movingLevelCache;
+
+    public static void setSubLevelProvider(Function<ClientLevel, List<MovingClientLevel.SubLevel>> provider) {
+        subLevelProvider = provider;
+    }
+
+    public static boolean hasMovingLevelSupport() {
+        return subLevelProvider != null;
+    }
 
     // Cache Write
 
     public static void onLoadLevel(ClientLevel clientLevel) {
+        updateMovingLevelCache(clientLevel);
         Loggers.logDebug("Creating initial level cache");
         updateLevelCache(clientLevel, levelOriginFromPlayer(), clientLevel.getGameTime());
 
@@ -37,6 +51,7 @@ public class LevelAccessUtils {
     }
 
     public static void onUnloadLevel(ClientLevel clientLevel) {
+        movingLevelCache = null;
         Loggers.logDebug("Removing level cache due to level unload");
         ((CachingClientLevel) clientLevel).sound_physics_remastered$setCachedClone(null);
 
@@ -45,8 +60,10 @@ public class LevelAccessUtils {
 
     public static void tickLevelCache(ClientLevel clientLevel) {
         if (!SoundPhysicsMod.CONFIG.enabled.get()) {
+            movingLevelCache = null;
             return;
         }
+        updateMovingLevelCache(clientLevel);
         if (SoundPhysicsMod.CONFIG.unsafeLevelAccess.get()) {
             // Disable all level cloning, use direct unsafe main thread access (original behavior).
             return;
@@ -99,6 +116,23 @@ public class LevelAccessUtils {
 
     // Cache Read
 
+    private static void updateMovingLevelCache(ClientLevel level) {
+        if (subLevelProvider != null) {
+            movingLevelCache = new MovingLevelCache(level, subLevelProvider.apply(level));
+        }
+    }
+
+    private static ClientLevelProxy withSubLevels(ClientLevel level, ClientLevelProxy proxy) {
+        var cache = movingLevelCache;
+        if (cache == null || cache.level != level || cache.subLevels.isEmpty()) {
+            return proxy;
+        }
+        return new MovingClientLevel(proxy, cache.subLevels);
+    }
+
+    private record MovingLevelCache(ClientLevel level, List<MovingClientLevel.SubLevel> subLevels) {
+    }
+
     @Nullable
     public static ClientLevelProxy getClientLevelProxy(Minecraft client) {
         var clientLevel = client.level;
@@ -109,7 +143,7 @@ public class LevelAccessUtils {
         }
 
         if (SoundPhysicsMod.CONFIG.unsafeLevelAccess.get()) {
-            return new UnsafeClientLevel(clientLevel);
+            return withSubLevels(clientLevel, new UnsafeClientLevel(clientLevel));
         }
 
         var cachingClientLevel = (CachingClientLevel) clientLevel;
@@ -120,7 +154,7 @@ public class LevelAccessUtils {
             return null;
         }
 
-        return clientLevelClone;
+        return withSubLevels(clientLevel, clientLevelClone);
     }
 
     // Utilities

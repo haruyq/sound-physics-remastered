@@ -2,11 +2,15 @@ package com.sonicether.soundphysics.world;
 
 import java.util.HashMap;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+
 import javax.annotation.Nonnull;
 
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -29,28 +33,28 @@ import net.minecraft.world.level.material.Fluids;
 public class ClonedClientLevel implements ClientLevelProxy {
 
     private final ClonedLevelHeightAccessor heightAccessor;
-    private final HashMap<ChunkPos, ClonedLevelChunk> clonedLevelChunks;
+    private final Long2ObjectMap<ClonedLevelChunk> clonedLevelChunks;
     private final BlockPos clonedLevelOrigin;
     private final long clonedLevelTick;
 
-    public ClonedClientLevel(ClientLevel level, BlockPos origin, long tick, int range) {
+    public ClonedClientLevel(Level level, BlockPos origin, long tick, int range) {
         var cache = level.getChunkSource();
         var heightAccessor = new ClonedLevelHeightAccessor(level);
 
-        var cachedLevelChunks = new HashMap<ChunkPos, ClonedLevelChunk>();
+        var cachedLevelChunks = new Long2ObjectOpenHashMap<ClonedLevelChunk>();
         var originChunkPos = new ChunkPos(origin.getX() >> 4, origin.getZ() >> 4);
 
         for (int x = -range; x < range; x++) {
             for (int z = -range; z < range; z++) {
                 var chunkPos = new ChunkPos(originChunkPos.x + x, originChunkPos.z + z);
-                var chunk = cache.getChunk(chunkPos.x, chunkPos.z, false);
+                var chunk = cache.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.FULL, false);
 
                 if (chunk == null) {
                     continue;
                 }
 
                 var clonedChunk = new ClonedLevelChunk(level, chunkPos, chunk.getSections());
-                cachedLevelChunks.put(chunkPos, clonedChunk);
+                cachedLevelChunks.put(chunkPos.toLong(), clonedChunk);
             }
         }
 
@@ -58,6 +62,14 @@ public class ClonedClientLevel implements ClientLevelProxy {
         this.clonedLevelOrigin = origin;
         this.clonedLevelTick = tick;
         this.clonedLevelChunks = cachedLevelChunks;
+    }
+
+    public ClonedClientLevel(Level level, BlockPos origin, long tick, HashMap<ChunkPos, ClonedLevelChunk> chunks) {
+        this.heightAccessor = new ClonedLevelHeightAccessor(level);
+        this.clonedLevelOrigin = origin;
+        this.clonedLevelTick = tick;
+        this.clonedLevelChunks = new Long2ObjectOpenHashMap<>(chunks.size());
+        chunks.forEach((pos, chunk) -> this.clonedLevelChunks.put(pos.toLong(), chunk));
     }
 
     // Properties
@@ -71,8 +83,7 @@ public class ClonedClientLevel implements ClientLevelProxy {
     }
 
     public ClonedLevelChunk getChunk(int x, int z) {
-        var chunkPos = new ChunkPos(x, z);
-        return clonedLevelChunks.get(chunkPos);
+        return clonedLevelChunks.get(ChunkPos.asLong(x, z));
     }
 
     @Override
@@ -81,8 +92,7 @@ public class ClonedClientLevel implements ClientLevelProxy {
             return Blocks.VOID_AIR.defaultBlockState();
         }
 
-        var chunkPos = new ChunkPos(blockPos.getX() >> 4, blockPos.getZ() >> 4);
-        var levelChunk = clonedLevelChunks.get(chunkPos);
+        var levelChunk = getChunk(blockPos.getX() >> 4, blockPos.getZ() >> 4);
 
         if (levelChunk == null) {
             return Blocks.VOID_AIR.defaultBlockState();
@@ -97,8 +107,7 @@ public class ClonedClientLevel implements ClientLevelProxy {
             return Fluids.EMPTY.defaultFluidState();
         }
 
-        var chunkPos = new ChunkPos(blockPos.getX() >> 4, blockPos.getZ() >> 4);
-        var levelChunk = clonedLevelChunks.get(chunkPos);
+        var levelChunk = getChunk(blockPos.getX() >> 4, blockPos.getZ() >> 4);
 
         if (levelChunk == null) {
             return Fluids.EMPTY.defaultFluidState();
@@ -119,8 +128,7 @@ public class ClonedClientLevel implements ClientLevelProxy {
 
     @Override
     public BlockEntity getBlockEntity(@Nonnull BlockPos blockPos) {
-        var chunkPos = new ChunkPos(blockPos.getX() >> 4, blockPos.getZ() >> 4);
-        var levelChunk = clonedLevelChunks.get(chunkPos);
+        var levelChunk = getChunk(blockPos.getX() >> 4, blockPos.getZ() >> 4);
 
         if (levelChunk == null) {
             return null;

@@ -1,17 +1,15 @@
 modLoader = "javafml"
 loaderVersion = "*"
 license = "GPL"
-issueTrackerURL = "https://github.com/henkelmax/sound-physics-remastered/issues"
 [[mods]]
 modId = "sound_physics_remastered"
 version = "${mod_version}"
-displayName = "Sound Physics Remastered"
-updateJSONURL = "https://update.maxhenkel.de/neoforge/sound_physics_remastered"
+displayName = "Sound Physics Remastered (Sable Compat)"
 displayURL = "https://www.curseforge.com/minecraft/mc-mods/sound-physics-remastered"
 logoFile = "icon.png"
 authors = "Sonic Ether, vlad2305m, Max Henkel"
 credits = "Sonic Ether, vlad2305m"
-description = '''Provides realistic sound attenuation, reverberation, and absorption through blocks.'''
+description = '''Provides realistic sound attenuation, reverberation, and absorption through blocks. Unofficial Sable compatibility build.'''
 displayTest = "IGNORE_ALL_VERSION"
 [[mixins]]
 config = "sound_physics_remastered.mixins.json"
@@ -39,3 +37,15 @@ type = "optional"
 versionRange = "[1.21-2.4.11,)"
 ordering = "AFTER"
 side = "BOTH"
+[[dependencies.sound_physics_remastered]]
+modId = "sable"
+type = "optional"
+versionRange = "[2.0.6,)"
+ordering = "AFTER"
+side = "CLIENT"
+[[dependencies.sound_physics_remastered]]
+modId = "sablecompanion"
+type = "optional"
+versionRange = "[1.6.0,2)"
+ordering = "AFTER"
+side = "CLIENT"

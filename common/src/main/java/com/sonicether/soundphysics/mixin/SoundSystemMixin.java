@@ -36,7 +36,7 @@ public class SoundSystemMixin {
 
     @Inject(method = "tickNonPaused", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Options;getSoundSourceVolume(Lnet/minecraft/sounds/SoundSource;)F"), locals = LocalCapture.CAPTURE_FAILHARD)
     private void tickNonPaused(CallbackInfo ci, Iterator<?> iterator, Map.Entry<SoundInstance, ChannelAccess.ChannelHandle> map, ChannelAccess.ChannelHandle channelHandle, SoundInstance sound) {
-        if (!SoundPhysicsMod.CONFIG.updateMovingSounds.get()) {
+        if (sound.isRelative() || !SoundPhysicsMod.CONFIG.updateMovingSounds.get()) {
             return;
         }
 

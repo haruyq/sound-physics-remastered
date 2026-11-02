@@ -21,11 +21,57 @@ processResources {
 
 repositories {
     maven { url = 'https://maven.shedaniel.me/' }
+    maven { url = 'https://maven.ryanhcode.dev/releases' }
 }
 
 dependencies {
+    compileOnly 'dev.ryanhcode.sable-companion:sable-companion-common-1.21.1:1.6.0'
     implementation "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
     runtimeOnly "maven.modrinth:simple-voice-chat:neoforge-${voicechat_version}"
     implementation "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
     compileOnly "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
+
+    testImplementation(platform('org.junit:junit-bom:5.11.4'))
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testCompileOnly(rootProject.project(':common').sourceSets.main.output)
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    if (providers.gradleProperty('sableTests').isPresent()) {
+        implementation('maven.modrinth:sable:2.0.6+mc1.21.1') { transitive = false }
+    }
+}
+
+if (providers.gradleProperty('sableTests').isPresent()) {
+    sourceSets.main.java.srcDir('src/gametest/java')
+    sourceSets.main.resources.srcDir('src/gametest/resources')
+    neoForge.runs {
+        gameTestServer {
+            type = 'gameTestServer'
+            gameDirectory = file('build/sable-gametest')
+            systemProperty 'neoforge.enabledGameTestNamespaces', mod_id
+            systemProperty 'soundphysics.benchmark', providers.gradleProperty('sableBenchmark').isPresent().toString()
+        }
+    }
+}
+
+if (providers.gradleProperty('clientSmokeTest').isPresent()) {
+    sourceSets.main.java.srcDir('src/clienttest/java')
+    neoForge.runs.client {
+        gameDirectory = file('build/client-smoke-' + providers.gradleProperty('sableTests').isPresent())
+    }
+}
+
+neoForge {
+    unitTest {
+        enable()
+        testedMod = mods."${mod_id}"
+    }
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+tasks.named('shadowJar') {
+    from(rootProject.file('LICENSE'))
 }
